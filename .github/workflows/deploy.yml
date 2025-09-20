@@ -1,65 +1,54 @@
-name: Auto Deploy Laravel to EC2
+name: Laravel Auto Deploy
 
 on:
   push:
     branches:
-      - main  # Change if your branch is different
+      - main
 
 jobs:
   deploy:
-    name: Deploy to EC2
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v0.1.10
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_SSH_KEY }}
-          script: |
-            echo "✅ SSH connection successful"
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          ssh-keyscan -H ${{ secrets.EC2_HOST }} >> ~/.ssh/known_hosts
 
-            PROJECT_DIR="/var/www/laravel-app"
-
-            # If project folder doesn't exist, clone it
+      - name: Deploy to EC2
+        run: |
+          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
+            PROJECT_DIR=/var/www/laravel-app
             if [ ! -d "$PROJECT_DIR" ]; then
-              echo "📦 Project not found. Cloning..."
               git clone ${{ secrets.GIT_REPO }} $PROJECT_DIR
             else
-              echo "📂 Project found. Pulling latest changes..."
               cd $PROJECT_DIR
               git reset --hard
-              git clean -df
+              git clean -fd
               git pull origin main
             fi
 
             cd $PROJECT_DIR
-
-            echo "🔧 Installing dependencies..."
             composer install --no-dev --optimize-autoloader
 
-            echo "🔐 Setting up Laravel .env"
             if [ ! -f .env ]; then
               cp .env.example .env
             fi
 
-            echo "🔑 Generating app key..."
             php artisan key:generate --force || true
-
-            echo "🔗 Creating storage link..."
             php artisan storage:link || true
 
-            echo "⚙️ Caching config, routes, and views..."
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
-
-            echo "🧬 Running migrations..."
             php artisan migrate --force
 
-            echo "🔐 Setting permissions..."
             chmod -R 775 storage bootstrap/cache
             chown -R www-data:www-data .
 
-            echo "🚀 Deployment complete!"
+            echo "Deployment successful!"
+          EOF
+        env:
+          GIT_REPO: ${{ secrets.GIT_REPO }}
