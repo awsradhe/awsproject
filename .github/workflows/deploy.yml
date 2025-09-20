@@ -1,57 +1,65 @@
-name: Deploy Laravel to AWS EC2
+name: Auto Deploy Laravel to EC2
 
 on:
   push:
     branches:
-      - main   # Trigger only on main branch
+      - main  # Change if your branch is different
 
 jobs:
   deploy:
-    name: Deploy on EC2 Instance
+    name: Deploy to EC2
     runs-on: ubuntu-latest
 
     steps:
-      - name: Deploy via SSH
+      - name: Deploy over SSH
         uses: appleboy/ssh-action@v0.1.10
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
-            echo "➡️ SSH connection established."
+            echo "✅ SSH connection successful"
 
-            cd /var/www/laravel-app
+            PROJECT_DIR="/var/www/laravel-app"
 
-            echo "📦 Pulling latest code..."
-            git reset --hard
-            git clean -df
-            git pull origin main
+            # If project folder doesn't exist, clone it
+            if [ ! -d "$PROJECT_DIR" ]; then
+              echo "📦 Project not found. Cloning..."
+              git clone ${{ secrets.GIT_REPO }} $PROJECT_DIR
+            else
+              echo "📂 Project found. Pulling latest changes..."
+              cd $PROJECT_DIR
+              git reset --hard
+              git clean -df
+              git pull origin main
+            fi
 
-            echo "📂 Setting correct permissions..."
-            sudo chown -R ubuntu:www-data .
-            sudo find . -type f -exec chmod 664 {} \;
-            sudo find . -type d -exec chmod 775 {} \;
-            chmod -R ug+rwx storage bootstrap/cache
+            cd $PROJECT_DIR
 
-            echo "🔧 Installing/updating dependencies..."
+            echo "🔧 Installing dependencies..."
             composer install --no-dev --optimize-autoloader
 
-            echo "🔐 Ensure .env exists and Laravel key is set..."
+            echo "🔐 Setting up Laravel .env"
             if [ ! -f .env ]; then
               cp .env.example .env
             fi
-            php artisan config:clear
+
+            echo "🔑 Generating app key..."
             php artisan key:generate --force || true
 
-            echo "🔗 Linking storage..."
+            echo "🔗 Creating storage link..."
             php artisan storage:link || true
 
-            echo "⚙️ Optimizing Laravel..."
+            echo "⚙️ Caching config, routes, and views..."
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
 
-            echo "🧬 Running database migrations..."
+            echo "🧬 Running migrations..."
             php artisan migrate --force
 
-            echo "✅ Laravel deployed successfully!"
+            echo "🔐 Setting permissions..."
+            chmod -R 775 storage bootstrap/cache
+            chown -R www-data:www-data .
+
+            echo "🚀 Deployment complete!"
