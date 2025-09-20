@@ -19,16 +19,10 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.EC2_KEY }}" > ~/.ssh/id_rsa
           chmod 600 ~/.ssh/id_rsa
-          # Check if the key is correctly written
-          cat ~/.ssh/id_rsa
 
-
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_KEY }}
-          port: 22
-          script: |
+      - name: Deploy to EC2
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
             cd /var/www/laravel-app
             git pull origin main
             composer install --no-interaction --prefer-dist
@@ -37,3 +31,4 @@ jobs:
             php artisan route:cache
             php artisan view:cache
             sudo chown -R www-data:www-data .
+          EOF
