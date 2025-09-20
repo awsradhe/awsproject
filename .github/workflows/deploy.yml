@@ -1,0 +1,57 @@
+name: Deploy Laravel to AWS EC2
+
+on:
+  push:
+    branches:
+      - main   # Trigger only on main branch
+
+jobs:
+  deploy:
+    name: Deploy on EC2 Instance
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            echo "➡️ SSH connection established."
+
+            cd /var/www/laravel-app
+
+            echo "📦 Pulling latest code..."
+            git reset --hard
+            git clean -df
+            git pull origin main
+
+            echo "📂 Setting correct permissions..."
+            sudo chown -R ubuntu:www-data .
+            sudo find . -type f -exec chmod 664 {} \;
+            sudo find . -type d -exec chmod 775 {} \;
+            chmod -R ug+rwx storage bootstrap/cache
+
+            echo "🔧 Installing/updating dependencies..."
+            composer install --no-dev --optimize-autoloader
+
+            echo "🔐 Ensure .env exists and Laravel key is set..."
+            if [ ! -f .env ]; then
+              cp .env.example .env
+            fi
+            php artisan config:clear
+            php artisan key:generate --force || true
+
+            echo "🔗 Linking storage..."
+            php artisan storage:link || true
+
+            echo "⚙️ Optimizing Laravel..."
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache
+
+            echo "🧬 Running database migrations..."
+            php artisan migrate --force
+
+            echo "✅ Laravel deployed successfully!"
