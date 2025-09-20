@@ -1,39 +1,31 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+
 jobs:
   deploy:
+    name: Deploy Laravel App to EC2
     runs-on: ubuntu-latest
+
     steps:
-      - name: Deploy to EC2
-        run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USERNAME }}@${{ secrets.EC2_HOST }} << 'EOF'
-            PROJECT_DIR=/var/www/laravel-app
-            if [ ! -d "$PROJECT_DIR" ]; then
-              git clone ${{ secrets.GIT_REPO }} $PROJECT_DIR
-            else
-              cd $PROJECT_DIR
-              git reset --hard
-              git clean -fd
-              git pull origin main
-            fi
+      - name: Checkout Repository
+        uses: actions/checkout@v3
 
-            cd $PROJECT_DIR
-            composer install --no-dev --optimize-autoloader
-
-            if [ ! -f .env ]; then
-              cp .env.example .env
-            fi
-
-            php artisan key:generate --force || true
-            php artisan storage:link || true
-
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            cd /var/www/laravel-aws-demo
+            git pull origin main
+            composer install --no-interaction --prefer-dist
+            php artisan migrate --force || true
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
-            php artisan migrate --force
-
-            chmod -R 775 storage bootstrap/cache
-            chown -R www-data:www-data .
-
-            echo "Deployment successful!"
-          EOF
-        env:
-          GIT_REPO: ${{ secrets.GIT_REPO }}
+            sudo chown -R www-data:www-data .
