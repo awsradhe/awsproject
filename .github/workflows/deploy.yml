@@ -1,34 +1,65 @@
-name: Deploy to AWS EC2
+name: Auto Deploy Laravel to EC2
 
 on:
   push:
     branches:
-      - main
+      - main  # Change if your branch is different
 
 jobs:
   deploy:
-    name: Deploy Laravel App to EC2
+    name: Deploy to EC2
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v3
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v0.1.10
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_KEY }}
+          script: |
+            echo "✅ SSH connection successful"
 
-      - name: Set up SSH key
-        run: |
-          mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
+            PROJECT_DIR="/var/www/laravel-app"
 
-      - name: Deploy to EC2
-        run: |
-          ssh -o StrictHostKeyChecking=no -i ~/.ssh/id_rsa ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} << 'EOF'
-            cd /var/www/laravel-app
-            git pull origin main
-            composer install --no-interaction --prefer-dist
-            php artisan migrate --force || true
+            # If project folder doesn't exist, clone it
+            if [ ! -d "$PROJECT_DIR" ]; then
+              echo "📦 Project not found. Cloning..."
+              git clone ${{ secrets.GIT_REPO }} $PROJECT_DIR
+            else
+              echo "📂 Project found. Pulling latest changes..."
+              cd $PROJECT_DIR
+              git reset --hard
+              git clean -df
+              git pull origin main
+            fi
+
+            cd $PROJECT_DIR
+
+            echo "🔧 Installing dependencies..."
+            composer install --no-dev --optimize-autoloader
+
+            echo "🔐 Setting up Laravel .env"
+            if [ ! -f .env ]; then
+              cp .env.example .env
+            fi
+
+            echo "🔑 Generating app key..."
+            php artisan key:generate --force || true
+
+            echo "🔗 Creating storage link..."
+            php artisan storage:link || true
+
+            echo "⚙️ Caching config, routes, and views..."
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache
-            sudo chown -R www-data:www-data .
-          EOF
+
+            echo "🧬 Running migrations..."
+            php artisan migrate --force
+
+            echo "🔐 Setting permissions..."
+            chmod -R 775 storage bootstrap/cache
+            chown -R www-data:www-data .
+
+            echo "🚀 Deployment complete!"
