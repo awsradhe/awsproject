@@ -16,7 +16,7 @@
 		<table border="1">
 			<thead>
 				<th>Sr.No</th>
-				<th>Name</th>
+				<th>Name dd</th>
 				<th>Email</th>
 				<th>Mobile</th>
 			</thead>
