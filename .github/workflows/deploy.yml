@@ -1,65 +1,69 @@
-name: Auto Deploy Laravel to EC2
+name: Deploy to EC2
 
 on:
   push:
-    branches:
-      - main  # Change if your branch is different
+    branches: [ "main" ]
 
 jobs:
   deploy:
-    name: Deploy to EC2
     runs-on: ubuntu-latest
-
     steps:
-      - name: Deploy over SSH
-        uses: appleboy/ssh-action@v0.1.10
-        with:
-          host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_USERNAME }}
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            echo "✅ SSH connection successful"
+      - name: Checkout
+        uses: actions/checkout@v4
 
-            PROJECT_DIR="/var/www/laravel-app"
+      - name: Sync files to server
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          TARGET_DIR: ${{ secrets.TARGET_DIR }}
+        run: |
+          mkdir -p ~/.ssh
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          # add host to known_hosts to avoid prompt
+          ssh-keyscan -p $SSH_PORT -H $SSH_HOST >> ~/.ssh/known_hosts
 
-            # If project folder doesn't exist, clone it
-            if [ ! -d "$PROJECT_DIR" ]; then
-              echo "📦 Project not found. Cloning..."
-              git clone ${{ secrets.GIT_REPO }} $PROJECT_DIR
-            else
-              echo "📂 Project found. Pulling latest changes..."
-              cd $PROJECT_DIR
-              git reset --hard
-              git clean -df
-              git pull origin main
-            fi
+          # rsync current repo to server (exclude sensitive / heavy dirs)
+          rsync -avz --delete \
+            --exclude='.git' \
+            --exclude='.env' \
+            --exclude='vendor' \
+            --exclude='node_modules' \
+            --exclude='storage' \
+            -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes -p $SSH_PORT" \
+            ./ $SSH_USER@$SSH_HOST:$TARGET_DIR
 
-            cd $PROJECT_DIR
+      - name: Remote composer install & migrate & cache
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_KEY }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          TARGET_DIR: ${{ secrets.TARGET_DIR }}
+        run: |
+          chmod 600 ~/.ssh/id_ed25519 || true
+          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes -p $SSH_PORT $SSH_USER@$SSH_HOST << 'EOF'
+            set -e
+            cd ${TARGET_DIR}
+            # get dependencies on server
+            composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
 
-            echo "🔧 Installing dependencies..."
-            composer install --no-dev --optimize-autoloader
+            # storage & cache perms
+            sudo chown -R www-data:www-data ${TARGET_DIR}
+            sudo chmod -R 775 ${TARGET_DIR}/storage ${TARGET_DIR}/bootstrap/cache || true
 
-            echo "🔐 Setting up Laravel .env"
-            if [ ! -f .env ]; then
-              cp .env.example .env
-            fi
-
-            echo "🔑 Generating app key..."
-            php artisan key:generate --force || true
-
-            echo "🔗 Creating storage link..."
-            php artisan storage:link || true
-
-            echo "⚙️ Caching config, routes, and views..."
-            php artisan config:cache
-            php artisan route:cache
-            php artisan view:cache
-
-            echo "🧬 Running migrations..."
+            # run migrations safely in non-interactive mode
             php artisan migrate --force
 
-            echo "🔐 Setting permissions..."
-            chmod -R 775 storage bootstrap/cache
-            chown -R www-data:www-data .
+            # optimize caches
+            php artisan config:cache
+            php artisan route:cache
+            php artisan view:cache || true
 
-            echo "🚀 Deployment complete!"
+            # reload nginx to pick up changes
+            sudo systemctl reload nginx || true
+          EOF
