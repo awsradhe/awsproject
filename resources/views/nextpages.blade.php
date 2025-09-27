@@ -6,7 +6,7 @@
 	<title></title>
 </head>
 <body>
-		<h1>Welcome to learning Aman  Shree New</h1>
+		<h1>Welcome to learning Aman  Shree Nsew</h1>
 		<a href="/">Go Back Page</a>
 </body>
 </html>
