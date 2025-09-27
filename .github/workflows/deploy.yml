@@ -11,21 +11,24 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Sync files to server
+      - name: Setup SSH
         env:
           SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_KEY }}
           SSH_HOST: ${{ secrets.SSH_HOST }}
-          SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
-          TARGET_DIR: ${{ secrets.TARGET_DIR }}
         run: |
           mkdir -p ~/.ssh
           echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
-          # add host to known_hosts to avoid prompt
           ssh-keyscan -p $SSH_PORT -H $SSH_HOST >> ~/.ssh/known_hosts
 
-          # rsync current repo to server (exclude sensitive / heavy dirs)
+      - name: Sync files to server
+        env:
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          TARGET_DIR: ${{ secrets.TARGET_DIR }}
+        run: |
           rsync -avz --delete \
             --exclude='.git' \
             --exclude='.env' \
@@ -35,35 +38,36 @@ jobs:
             -e "ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes -p $SSH_PORT" \
             ./ $SSH_USER@$SSH_HOST:$TARGET_DIR
 
-      - name: Remote composer install & migrate & cache
+      - name: Remote install, migrate & cache
         env:
-          SSH_PRIVATE_KEY: ${{ secrets.DEPLOY_KEY }}
-          SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_HOST: ${{ secrets.SSH_HOST }}
           SSH_PORT: ${{ secrets.SSH_PORT }}
           TARGET_DIR: ${{ secrets.TARGET_DIR }}
         run: |
-          chmod 600 ~/.ssh/id_ed25519 || true
-          echo "$SSH_PRIVATE_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
           ssh -i ~/.ssh/id_ed25519 -o StrictHostKeyChecking=yes -p $SSH_PORT $SSH_USER@$SSH_HOST << 'EOF'
             set -e
             cd ${TARGET_DIR}
-            # get dependencies on server
+
+            # Install PHP dependencies
             composer install --no-dev --prefer-dist --optimize-autoloader --no-interaction
 
-            # storage & cache perms
+            # Fix storage permissions
             sudo chown -R www-data:www-data ${TARGET_DIR}
             sudo chmod -R 775 ${TARGET_DIR}/storage ${TARGET_DIR}/bootstrap/cache || true
 
-            # run migrations safely in non-interactive mode
+            # Run DB migrations
             php artisan migrate --force
 
-            # optimize caches
+            # Clear & rebuild caches
+            php artisan config:clear
+            php artisan route:clear
+            php artisan view:clear
             php artisan config:cache
             php artisan route:cache
             php artisan view:cache || true
 
-            # reload nginx to pick up changes
+            # Restart services (update php8.x-fpm version if needed)
+            sudo systemctl restart php8.2-fpm || sudo systemctl restart php-fpm || true
             sudo systemctl reload nginx || true
           EOF
